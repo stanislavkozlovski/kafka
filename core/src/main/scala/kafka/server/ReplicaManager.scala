@@ -324,7 +324,7 @@ class ReplicaManager(val config: KafkaConfig,
   }
 
   def stopReplica(topicPartition: TopicPartition, deletePartition: Boolean)  = {
-    stateChangeLogger.trace(s"Handling stop replica (delete=$deletePartition) for partition $topicPartition")
+    stateChangeLogger.info(s"Handling stop replica (delete=$deletePartition) for partition $topicPartition")
 
     if (deletePartition) {
       getPartition(topicPartition) match {
@@ -339,7 +339,7 @@ class ReplicaManager(val config: KafkaConfig,
           }
 
         case HostedPartition.None =>
-          stateChangeLogger.trace(s"Ignoring stop replica (delete=$deletePartition) for partition " +
+          stateChangeLogger.info(s"Ignoring stop replica (delete=$deletePartition) for partition " +
             s"$topicPartition as replica doesn't exist on broker")
       }
 
@@ -355,7 +355,7 @@ class ReplicaManager(val config: KafkaConfig,
     // We force completion to prevent them from timing out.
     completeDelayedFetchOrProduceRequests(topicPartition)
 
-    stateChangeLogger.trace(s"Finished handling stop replica (delete=$deletePartition) for partition $topicPartition")
+    stateChangeLogger.info(s"Finished handling stop replica (delete=$deletePartition) for partition $topicPartition")
   }
 
   private def completeDelayedFetchOrProduceRequests(topicPartition: TopicPartition): Unit = {
@@ -377,7 +377,10 @@ class ReplicaManager(val config: KafkaConfig,
         // First stop fetchers for all partitions, then stop the corresponding replicas
         replicaFetcherManager.removeFetcherForPartitions(partitions)
         replicaAlterLogDirsManager.removeFetcherForPartitions(partitions)
-        for (topicPartition <- partitions){
+
+        var stopReplicaCount = partitions.size
+        stateChangeLogger.info(s"Handling stop replica (delete=${stopReplicaRequest.deletePartitions}) for ${stopReplicaCount} partitions (${partitions.mkString(", ")})")
+        for (topicPartition <- partitions) {
           try {
             stopReplica(topicPartition, stopReplicaRequest.deletePartitions)
             responseMap.put(topicPartition, Errors.NONE)
@@ -386,8 +389,10 @@ class ReplicaManager(val config: KafkaConfig,
               stateChangeLogger.error(s"Ignoring stop replica (delete=${stopReplicaRequest.deletePartitions}) for " +
                 s"partition $topicPartition due to storage exception", e)
               responseMap.put(topicPartition, Errors.KAFKA_STORAGE_ERROR)
+              stopReplicaCount -= 1
           }
         }
+        stateChangeLogger.info(s"Successfully handled stop replica (delete=${stopReplicaRequest.deletePartitions}) for ${stopReplicaCount} partitions")
         (responseMap, Errors.NONE)
       }
     }
@@ -1174,12 +1179,10 @@ class ReplicaManager(val config: KafkaConfig,
   def becomeLeaderOrFollower(correlationId: Int,
                              leaderAndIsrRequest: LeaderAndIsrRequest,
                              onLeadershipChange: (Iterable[Partition], Iterable[Partition]) => Unit): LeaderAndIsrResponse = {
-    if (stateChangeLogger.isTraceEnabled) {
-      leaderAndIsrRequest.partitionStates.asScala.foreach { partitionState =>
-        stateChangeLogger.trace(s"Received LeaderAndIsr request $partitionState " +
-          s"correlation id $correlationId from controller ${leaderAndIsrRequest.controllerId} " +
-          s"epoch ${leaderAndIsrRequest.controllerEpoch}")
-      }
+    leaderAndIsrRequest.partitionStates.asScala.foreach { partitionState =>
+      stateChangeLogger.info(s"Received LeaderAndIsr request $partitionState " +
+        s"correlation id $correlationId from controller ${leaderAndIsrRequest.controllerId} " +
+        s"epoch ${leaderAndIsrRequest.controllerEpoch}")
     }
     replicaStateChangeLock synchronized {
       if (leaderAndIsrRequest.controllerEpoch < controllerEpoch) {
@@ -1353,7 +1356,7 @@ class ReplicaManager(val config: KafkaConfig,
                           responseMap: mutable.Map[TopicPartition, Errors],
                           highWatermarkCheckpoints: OffsetCheckpoints): Set[Partition] = {
     partitionStates.keys.foreach { partition =>
-      stateChangeLogger.trace(s"Handling LeaderAndIsr request correlationId $correlationId from " +
+      stateChangeLogger.info(s"Handling LeaderAndIsr request correlationId $correlationId from " +
         s"controller $controllerId epoch $controllerEpoch starting the become-leader transition for " +
         s"partition ${partition.topicPartition}")
     }
@@ -1371,7 +1374,7 @@ class ReplicaManager(val config: KafkaConfig,
         try {
           if (partition.makeLeader(controllerId, partitionState, correlationId, highWatermarkCheckpoints)) {
             partitionsToMakeLeaders += partition
-            stateChangeLogger.trace(s"Stopped fetchers as part of become-leader request from " +
+            stateChangeLogger.info(s"Stopped fetchers as part of become-leader request from " +
               s"controller $controllerId epoch $controllerEpoch with correlation id $correlationId for partition ${partition.topicPartition} " +
               s"(last update controller epoch ${partitionState.controllerEpoch})")
           } else
@@ -1402,7 +1405,7 @@ class ReplicaManager(val config: KafkaConfig,
     }
 
     partitionStates.keys.foreach { partition =>
-      stateChangeLogger.trace(s"Completed LeaderAndIsr request correlationId $correlationId from controller $controllerId " +
+      stateChangeLogger.info(s"Completed LeaderAndIsr request correlationId $correlationId from controller $controllerId " +
         s"epoch $controllerEpoch for the become-leader transition for partition ${partition.topicPartition}")
     }
 
@@ -1434,7 +1437,7 @@ class ReplicaManager(val config: KafkaConfig,
                             responseMap: mutable.Map[TopicPartition, Errors],
                             highWatermarkCheckpoints: OffsetCheckpoints) : Set[Partition] = {
     partitionStates.foreach { case (partition, partitionState) =>
-      stateChangeLogger.trace(s"Handling LeaderAndIsr request correlationId $correlationId from controller $controllerId " +
+      stateChangeLogger.info(s"Handling LeaderAndIsr request correlationId $correlationId from controller $controllerId " +
         s"epoch $controllerEpoch starting the become-follower transition for partition ${partition.topicPartition} with leader " +
         s"${partitionState.leader}")
     }
@@ -1486,7 +1489,7 @@ class ReplicaManager(val config: KafkaConfig,
 
       replicaFetcherManager.removeFetcherForPartitions(partitionsToMakeFollower.map(_.topicPartition))
       partitionsToMakeFollower.foreach { partition =>
-        stateChangeLogger.trace(s"Stopped fetchers as part of become-follower request from controller $controllerId " +
+        stateChangeLogger.info(s"Stopped fetchers as part of become-follower request from controller $controllerId " +
           s"epoch $controllerEpoch with correlation id $correlationId for partition ${partition.topicPartition} with leader " +
           s"${partitionStates(partition).leader}")
       }
@@ -1496,14 +1499,14 @@ class ReplicaManager(val config: KafkaConfig,
       }
 
       partitionsToMakeFollower.foreach { partition =>
-        stateChangeLogger.trace(s"Truncated logs and checkpointed recovery boundaries for partition " +
+        stateChangeLogger.info(s"Truncated logs and checkpointed recovery boundaries for partition " +
           s"${partition.topicPartition} as part of become-follower request with correlation id $correlationId from " +
           s"controller $controllerId epoch $controllerEpoch with leader ${partitionStates(partition).leader}")
       }
 
       if (isShuttingDown.get()) {
         partitionsToMakeFollower.foreach { partition =>
-          stateChangeLogger.trace(s"Skipped the adding-fetcher step of the become-follower state " +
+          stateChangeLogger.info(s"Skipped the adding-fetcher step of the become-follower state " +
             s"change with correlation id $correlationId from controller $controllerId epoch $controllerEpoch for " +
             s"partition ${partition.topicPartition} with leader ${partitionStates(partition).leader} " +
             "since it is shutting down")
@@ -1519,7 +1522,7 @@ class ReplicaManager(val config: KafkaConfig,
 
         replicaFetcherManager.addFetcherForPartitions(partitionsToMakeFollowerWithLeaderAndOffset)
         partitionsToMakeFollowerWithLeaderAndOffset.foreach { case (partition, initialFetchState) =>
-          stateChangeLogger.trace(s"Started fetcher to new leader as part of become-follower " +
+          stateChangeLogger.info(s"Started fetcher to new leader as part of become-follower " +
             s"request from controller $controllerId epoch $controllerEpoch with correlation id $correlationId for " +
             s"partition $partition with leader ${initialFetchState.leader}")
         }
@@ -1533,7 +1536,7 @@ class ReplicaManager(val config: KafkaConfig,
     }
 
     partitionStates.keys.foreach { partition =>
-      stateChangeLogger.trace(s"Completed LeaderAndIsr request correlationId $correlationId from controller $controllerId " +
+      stateChangeLogger.info(s"Completed LeaderAndIsr request correlationId $correlationId from controller $controllerId " +
         s"epoch $controllerEpoch for the become-follower transition for partition ${partition.topicPartition} with leader " +
         s"${partitionStates(partition).leader}")
     }
