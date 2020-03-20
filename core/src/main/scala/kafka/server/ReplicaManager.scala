@@ -324,7 +324,7 @@ class ReplicaManager(val config: KafkaConfig,
   }
 
   def stopReplica(topicPartition: TopicPartition, deletePartition: Boolean)  = {
-    stateChangeLogger.info(s"Handling stop replica (delete=$deletePartition) for partition $topicPartition")
+    stateChangeLogger.trace(s"Handling stop replica (delete=$deletePartition) for partition $topicPartition")
 
     if (deletePartition) {
       getPartition(topicPartition) match {
@@ -355,7 +355,7 @@ class ReplicaManager(val config: KafkaConfig,
     // We force completion to prevent them from timing out.
     completeDelayedFetchOrProduceRequests(topicPartition)
 
-    stateChangeLogger.info(s"Finished handling stop replica (delete=$deletePartition) for partition $topicPartition")
+    stateChangeLogger.trace(s"Finished handling stop replica (delete=$deletePartition) for partition $topicPartition")
   }
 
   private def completeDelayedFetchOrProduceRequests(topicPartition: TopicPartition): Unit = {

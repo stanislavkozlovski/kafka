@@ -266,9 +266,10 @@ class RequestSendThread(val controllerId: Int,
 
         val response = clientResponse.responseBody
 
-        stateChangeLogger.withControllerEpoch(controllerContext.epoch).info(s"Received response " +
-          s"${response.toString(requestHeader.apiVersion)} for request $api with correlation id " +
-          s"${requestHeader.correlationId} sent to broker $brokerNode")
+        if (stateChangeLogger.isTraceEnabled)
+          stateChangeLogger.withControllerEpoch(controllerContext.epoch).trace(s"Received response " +
+            s"${response.toString(requestHeader.apiVersion)} for request $api with correlation id " +
+            s"${requestHeader.correlationId} sent to broker $brokerNode")
 
         if (callback != null) {
           callback(response)
@@ -471,10 +472,11 @@ abstract class AbstractControllerBrokerRequestBatch(config: KafkaConfig,
   }
 
   private def sendUpdateMetadataRequests(controllerEpoch: Int, stateChangeLog: StateChangeLogger): Unit = {
-    updateMetadataRequestPartitionInfoMap.foreach { case (tp, partitionState) =>
-      stateChangeLog.info(s"Sending UpdateMetadata request $partitionState to brokers $updateMetadataRequestBrokerSet " +
-        s"for partition $tp")
-    }
+    if (stateChangeLog.isTraceEnabled)
+      updateMetadataRequestPartitionInfoMap.foreach { case (tp, partitionState) =>
+        stateChangeLog.trace(s"Sending UpdateMetadata request $partitionState to brokers $updateMetadataRequestBrokerSet " +
+          s"for partition $tp")
+      }
 
     val partitionStates = updateMetadataRequestPartitionInfoMap.values.toBuffer
     val updateMetadataRequestVersion: Short =
