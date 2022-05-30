@@ -17,14 +17,14 @@
 
 package kafka.server
 
-import kafka.utils.Logging
 import kafka.cluster.BrokerEndPoint
 import kafka.metrics.KafkaMetricsGroup
-import org.apache.kafka.common.TopicPartition
+import kafka.utils.Implicits._
+import kafka.utils.Logging
+import org.apache.kafka.common.{TopicPartition, Uuid}
 import org.apache.kafka.common.utils.Utils
 
-import scala.collection.mutable
-import scala.collection.{Map, Set}
+import scala.collection.{Map, Set, mutable}
 
 abstract class AbstractFetcherManager[T <: AbstractFetcherThread](val name: String, clientId: String, numFetchers: Int)
   extends Logging with KafkaMetricsGroup {
@@ -62,14 +62,22 @@ abstract class AbstractFetcherManager[T <: AbstractFetcherThread](val name: Stri
 
   def resizeThreadPool(newSize: Int): Unit = {
     def migratePartitions(newSize: Int): Unit = {
-      fetcherThreadMap.foreach { case (id, thread) =>
-        val removedPartitions = thread.partitionsAndOffsets
-        removeFetcherForPartitions(removedPartitions.keySet)
+      val allRemovedPartitionsMap = mutable.Map[TopicPartition, InitialFetchState]()
+      fetcherThreadMap.forKeyValue { (id, thread) =>
+        val partitionStates = thread.removeAllPartitions()
         if (id.fetcherId >= newSize)
           thread.shutdown()
-        addFetcherForPartitions(removedPartitions)
+        partitionStates.forKeyValue { (topicPartition, currentFetchState) =>
+            val initialFetchState = InitialFetchState(currentFetchState.topicId, thread.sourceBroker,
+              currentLeaderEpoch = currentFetchState.currentLeaderEpoch,
+              initOffset = currentFetchState.fetchOffset)
+            allRemovedPartitionsMap += topicPartition -> initialFetchState
+        }
       }
+      // failed partitions are removed when adding partitions to fetcher
+      addFetcherForPartitions(allRemovedPartitionsMap)
     }
+
     lock synchronized {
       val currentSize = numFetchersPerBroker
       info(s"Resizing fetcher thread pool size from $currentSize to $newSize")
@@ -140,30 +148,54 @@ abstract class AbstractFetcherManager[T <: AbstractFetcherThread](val name: Stri
           case None =>
             addAndStartFetcherThread(brokerAndFetcherId, brokerIdAndFetcherId)
         }
-
-        val initialOffsetAndEpochs = initialFetchOffsets.map { case (tp, brokerAndInitOffset) =>
-          tp -> OffsetAndEpoch(brokerAndInitOffset.initOffset, brokerAndInitOffset.currentLeaderEpoch)
-        }
-
-        addPartitionsToFetcherThread(fetcherThread, initialOffsetAndEpochs)
+        // failed partitions are removed when added partitions to thread
+        addPartitionsToFetcherThread(fetcherThread, initialFetchOffsets)
       }
     }
   }
 
+  def addFailedPartition(topicPartition: TopicPartition): Unit = {
+    lock synchronized {
+      failedPartitions.add(topicPartition)
+    }
+  }
+
   protected def addPartitionsToFetcherThread(fetcherThread: T,
-                                             initialOffsetAndEpochs: collection.Map[TopicPartition, OffsetAndEpoch]): Unit = {
+                                             initialOffsetAndEpochs: collection.Map[TopicPartition, InitialFetchState]): Unit = {
     fetcherThread.addPartitions(initialOffsetAndEpochs)
     info(s"Added fetcher to broker ${fetcherThread.sourceBroker.id} for partitions $initialOffsetAndEpochs")
   }
 
-  def removeFetcherForPartitions(partitions: Set[TopicPartition]): Unit = {
+  /**
+   * If the fetcher and partition state exist, update all to include the topic ID
+   *
+   * @param partitionsToUpdate a mapping of partitions to be updated to their leader IDs
+   * @param topicIds           the mappings from topic name to ID or None if it does not exist
+   */
+  def maybeUpdateTopicIds(partitionsToUpdate: Map[TopicPartition, Int], topicIds: String => Option[Uuid]): Unit = {
+    lock synchronized {
+      val partitionsPerFetcher = partitionsToUpdate.groupBy { case (topicPartition, leaderId) =>
+        BrokerIdAndFetcherId(leaderId, getFetcherId(topicPartition))
+      }.map { case (brokerAndFetcherId, partitionsToUpdate) =>
+        (brokerAndFetcherId, partitionsToUpdate.keySet)
+      }
+
+      for ((brokerIdAndFetcherId, partitions) <- partitionsPerFetcher) {
+        fetcherThreadMap.get(brokerIdAndFetcherId).foreach(_.maybeUpdateTopicIds(partitions, topicIds))
+      }
+    }
+  }
+
+  def removeFetcherForPartitions(partitions: Set[TopicPartition]): Map[TopicPartition, PartitionFetchState] = {
+    val fetchStates = mutable.Map.empty[TopicPartition, PartitionFetchState]
     lock synchronized {
       for (fetcher <- fetcherThreadMap.values)
-        fetcher.removePartitions(partitions)
+        fetchStates ++= fetcher.removePartitions(partitions)
       failedPartitions.removeAll(partitions)
     }
     if (partitions.nonEmpty)
       info(s"Removed fetcher for partitions $partitions")
+    fetchStates
   }
 
   def shutdownIdleFetcherThreads(): Unit = {
@@ -181,11 +213,11 @@ abstract class AbstractFetcherManager[T <: AbstractFetcherThread](val name: Stri
 
   def closeAllFetchers(): Unit = {
     lock synchronized {
-      for ( (_, fetcher) <- fetcherThreadMap) {
+      for ((_, fetcher) <- fetcherThreadMap) {
         fetcher.initiateShutdown()
       }
 
-      for ( (_, fetcher) <- fetcherThreadMap) {
+      for ((_, fetcher) <- fetcherThreadMap) {
         fetcher.shutdown()
       }
       fetcherThreadMap.clear()
@@ -222,10 +254,14 @@ class FailedPartitions {
   def contains(topicPartition: TopicPartition): Boolean = synchronized {
     failedPartitionsSet.contains(topicPartition)
   }
+
+  def partitions(): Set[TopicPartition] = synchronized {
+    failedPartitionsSet.toSet
+  }
 }
 
 case class BrokerAndFetcherId(broker: BrokerEndPoint, fetcherId: Int)
 
-case class InitialFetchState(leader: BrokerEndPoint, currentLeaderEpoch: Int, initOffset: Long)
+case class InitialFetchState(topicId: Option[Uuid], leader: BrokerEndPoint, currentLeaderEpoch: Int, initOffset: Long)
 
 case class BrokerIdAndFetcherId(brokerId: Int, fetcherId: Int)

@@ -17,6 +17,7 @@
 
 package org.apache.kafka.connect.runtime.distributed;
 
+import org.apache.kafka.clients.CommonClientConfigs;
 import org.apache.kafka.common.config.ConfigException;
 import org.junit.Test;
 
@@ -27,9 +28,14 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import static org.apache.kafka.connect.runtime.distributed.DistributedConfig.EXACTLY_ONCE_SOURCE_SUPPORT_CONFIG;
+import static org.apache.kafka.connect.runtime.distributed.DistributedConfig.GROUP_ID_CONFIG;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertThrows;
+import static org.junit.Assert.assertTrue;
 
 public class DistributedConfigTest {
 
@@ -65,33 +71,33 @@ public class DistributedConfigTest {
         assertEquals(512 / 8, keyGenerator.generateKey().getEncoded().length);
     }
 
-    @Test(expected = ConfigException.class)
+    @Test
     public void shouldFailWithEmptyListOfVerificationAlgorithms() {
         Map<String, String> configs = configs();
         configs.put(DistributedConfig.INTER_WORKER_VERIFICATION_ALGORITHMS_CONFIG, "");
-        new DistributedConfig(configs);
+        assertThrows(ConfigException.class, () -> new DistributedConfig(configs));
     }
 
-    @Test(expected = ConfigException.class)
+    @Test
     public void shouldFailIfKeyAlgorithmNotInVerificationAlgorithmsList() {
         Map<String, String> configs = configs();
         configs.put(DistributedConfig.INTER_WORKER_KEY_GENERATION_ALGORITHM_CONFIG, "HmacSHA1");
         configs.put(DistributedConfig.INTER_WORKER_VERIFICATION_ALGORITHMS_CONFIG, "HmacSHA256");
-        new DistributedConfig(configs);
+        assertThrows(ConfigException.class, () -> new DistributedConfig(configs));
     }
 
-    @Test(expected = ConfigException.class)
+    @Test
     public void shouldFailWithInvalidKeyAlgorithm() {
         Map<String, String> configs = configs();
         configs.put(DistributedConfig.INTER_WORKER_KEY_GENERATION_ALGORITHM_CONFIG, "not-actually-a-key-algorithm");
-        new DistributedConfig(configs);
+        assertThrows(ConfigException.class, () -> new DistributedConfig(configs));
     }
 
-    @Test(expected = ConfigException.class)
+    @Test
     public void shouldFailWithInvalidKeySize() {
         Map<String, String> configs = configs();
         configs.put(DistributedConfig.INTER_WORKER_KEY_SIZE_CONFIG, "0");
-        new DistributedConfig(configs);
+        assertThrows(ConfigException.class, () -> new DistributedConfig(configs));
     }
 
     @Test
@@ -105,4 +111,240 @@ public class DistributedConfigTest {
             algorithms.add(algorithms.remove(0));
         }
     }
+
+    @Test
+    public void shouldAllowNegativeOneAndPositiveForPartitions() {
+        Map<String, String> settings = configs();
+        settings.put(DistributedConfig.OFFSET_STORAGE_PARTITIONS_CONFIG, "-1");
+        settings.put(DistributedConfig.STATUS_STORAGE_PARTITIONS_CONFIG, "-1");
+        new DistributedConfig(configs());
+        settings.remove(DistributedConfig.OFFSET_STORAGE_PARTITIONS_CONFIG);
+        settings.remove(DistributedConfig.STATUS_STORAGE_PARTITIONS_CONFIG);
+
+        for (int i = 1; i != 100; ++i) {
+            settings.put(DistributedConfig.OFFSET_STORAGE_PARTITIONS_CONFIG, Integer.toString(i));
+            new DistributedConfig(settings);
+            settings.remove(DistributedConfig.OFFSET_STORAGE_PARTITIONS_CONFIG);
+
+            settings.put(DistributedConfig.STATUS_STORAGE_PARTITIONS_CONFIG, Integer.toString(i));
+            new DistributedConfig(settings);
+        }
+    }
+
+    @Test
+    public void shouldNotAllowZeroPartitions() {
+        Map<String, String> settings = configs();
+        settings.put(DistributedConfig.OFFSET_STORAGE_PARTITIONS_CONFIG, "0");
+        assertThrows(ConfigException.class, () -> new DistributedConfig(settings));
+        settings.remove(DistributedConfig.OFFSET_STORAGE_PARTITIONS_CONFIG);
+
+        settings.put(DistributedConfig.STATUS_STORAGE_PARTITIONS_CONFIG, "0");
+        assertThrows(ConfigException.class, () -> new DistributedConfig(settings));
+    }
+
+    @Test
+    public void shouldNotAllowNegativePartitionsLessThanNegativeOne() {
+        Map<String, String> settings = configs();
+        for (int i = -2; i > -100; --i) {
+            settings.put(DistributedConfig.OFFSET_STORAGE_PARTITIONS_CONFIG, Integer.toString(i));
+            assertThrows(ConfigException.class, () -> new DistributedConfig(settings));
+            settings.remove(DistributedConfig.OFFSET_STORAGE_PARTITIONS_CONFIG);
+
+            settings.put(DistributedConfig.STATUS_STORAGE_PARTITIONS_CONFIG, Integer.toString(i));
+            assertThrows(ConfigException.class, () -> new DistributedConfig(settings));
+        }
+    }
+
+    @Test
+    public void shouldAllowNegativeOneAndPositiveForReplicationFactor() {
+        Map<String, String> settings = configs();
+        settings.put(DistributedConfig.CONFIG_STORAGE_REPLICATION_FACTOR_CONFIG, "-1");
+        settings.put(DistributedConfig.OFFSET_STORAGE_REPLICATION_FACTOR_CONFIG, "-1");
+        settings.put(DistributedConfig.STATUS_STORAGE_REPLICATION_FACTOR_CONFIG, "-1");
+        new DistributedConfig(configs());
+        settings.remove(DistributedConfig.CONFIG_STORAGE_REPLICATION_FACTOR_CONFIG);
+        settings.remove(DistributedConfig.OFFSET_STORAGE_PARTITIONS_CONFIG);
+        settings.remove(DistributedConfig.STATUS_STORAGE_PARTITIONS_CONFIG);
+
+        for (int i = 1; i != 100; ++i) {
+            settings.put(DistributedConfig.CONFIG_STORAGE_REPLICATION_FACTOR_CONFIG, Integer.toString(i));
+            new DistributedConfig(settings);
+            settings.remove(DistributedConfig.CONFIG_STORAGE_REPLICATION_FACTOR_CONFIG);
+
+            settings.put(DistributedConfig.OFFSET_STORAGE_PARTITIONS_CONFIG, Integer.toString(i));
+            new DistributedConfig(settings);
+            settings.remove(DistributedConfig.OFFSET_STORAGE_PARTITIONS_CONFIG);
+
+            settings.put(DistributedConfig.STATUS_STORAGE_PARTITIONS_CONFIG, Integer.toString(i));
+            new DistributedConfig(settings);
+        }
+    }
+
+    @Test
+    public void shouldNotAllowZeroReplicationFactor() {
+        Map<String, String> settings = configs();
+        settings.put(DistributedConfig.CONFIG_STORAGE_REPLICATION_FACTOR_CONFIG, "0");
+        assertThrows(ConfigException.class, () -> new DistributedConfig(settings));
+        settings.remove(DistributedConfig.CONFIG_STORAGE_REPLICATION_FACTOR_CONFIG);
+
+        settings.put(DistributedConfig.OFFSET_STORAGE_REPLICATION_FACTOR_CONFIG, "0");
+        assertThrows(ConfigException.class, () -> new DistributedConfig(settings));
+        settings.remove(DistributedConfig.OFFSET_STORAGE_REPLICATION_FACTOR_CONFIG);
+
+        settings.put(DistributedConfig.STATUS_STORAGE_REPLICATION_FACTOR_CONFIG, "0");
+        assertThrows(ConfigException.class, () -> new DistributedConfig(settings));
+    }
+
+    @Test
+    public void shouldNotAllowNegativeReplicationFactorLessThanNegativeOne() {
+        Map<String, String> settings = configs();
+        for (int i = -2; i > -100; --i) {
+            settings.put(DistributedConfig.CONFIG_STORAGE_REPLICATION_FACTOR_CONFIG, Integer.toString(i));
+            assertThrows(ConfigException.class, () -> new DistributedConfig(settings));
+            settings.remove(DistributedConfig.CONFIG_STORAGE_REPLICATION_FACTOR_CONFIG);
+
+            settings.put(DistributedConfig.OFFSET_STORAGE_REPLICATION_FACTOR_CONFIG, Integer.toString(i));
+            assertThrows(ConfigException.class, () -> new DistributedConfig(settings));
+            settings.remove(DistributedConfig.OFFSET_STORAGE_REPLICATION_FACTOR_CONFIG);
+
+            settings.put(DistributedConfig.STATUS_STORAGE_REPLICATION_FACTOR_CONFIG, Integer.toString(i));
+            assertThrows(ConfigException.class, () -> new DistributedConfig(settings));
+        }
+    }
+
+    @Test
+    public void shouldAllowSettingConfigTopicSettings() {
+        Map<String, String> topicSettings = new HashMap<>();
+        topicSettings.put("foo", "foo value");
+        topicSettings.put("bar", "bar value");
+        topicSettings.put("baz.bim", "100");
+        Map<String, String> settings = configs();
+        topicSettings.forEach((k, v) -> settings.put(DistributedConfig.CONFIG_STORAGE_PREFIX + k, v));
+        DistributedConfig config = new DistributedConfig(settings);
+        assertEquals(topicSettings, config.configStorageTopicSettings());
+    }
+
+    @Test
+    public void shouldAllowSettingOffsetTopicSettings() {
+        Map<String, String> topicSettings = new HashMap<>();
+        topicSettings.put("foo", "foo value");
+        topicSettings.put("bar", "bar value");
+        topicSettings.put("baz.bim", "100");
+        Map<String, String> settings = configs();
+        topicSettings.forEach((k, v) -> settings.put(DistributedConfig.OFFSET_STORAGE_PREFIX + k, v));
+        DistributedConfig config = new DistributedConfig(settings);
+        assertEquals(topicSettings, config.offsetStorageTopicSettings());
+    }
+
+    @Test
+    public void shouldAllowSettingStatusTopicSettings() {
+        Map<String, String> topicSettings = new HashMap<>();
+        topicSettings.put("foo", "foo value");
+        topicSettings.put("bar", "bar value");
+        topicSettings.put("baz.bim", "100");
+        Map<String, String> settings = configs();
+        topicSettings.forEach((k, v) -> settings.put(DistributedConfig.STATUS_STORAGE_PREFIX + k, v));
+        DistributedConfig config = new DistributedConfig(settings);
+        assertEquals(topicSettings, config.statusStorageTopicSettings());
+    }
+
+    @Test
+    public void shouldRemoveCompactionFromConfigTopicSettings() {
+        Map<String, String> expectedTopicSettings = new HashMap<>();
+        expectedTopicSettings.put("foo", "foo value");
+        expectedTopicSettings.put("bar", "bar value");
+        expectedTopicSettings.put("baz.bim", "100");
+        Map<String, String> topicSettings = new HashMap<>(expectedTopicSettings);
+        topicSettings.put("cleanup.policy", "something-else");
+        topicSettings.put("partitions", "3");
+
+        Map<String, String> settings = configs();
+        topicSettings.forEach((k, v) -> settings.put(DistributedConfig.CONFIG_STORAGE_PREFIX + k, v));
+        DistributedConfig config = new DistributedConfig(settings);
+        Map<String, Object> actual = config.configStorageTopicSettings();
+        assertEquals(expectedTopicSettings, actual);
+        assertNotEquals(topicSettings, actual);
+    }
+
+    @Test
+    public void shouldRemoveCompactionFromOffsetTopicSettings() {
+        Map<String, String> expectedTopicSettings = new HashMap<>();
+        expectedTopicSettings.put("foo", "foo value");
+        expectedTopicSettings.put("bar", "bar value");
+        expectedTopicSettings.put("baz.bim", "100");
+        Map<String, String> topicSettings = new HashMap<>(expectedTopicSettings);
+        topicSettings.put("cleanup.policy", "something-else");
+
+        Map<String, String> settings = configs();
+        topicSettings.forEach((k, v) -> settings.put(DistributedConfig.OFFSET_STORAGE_PREFIX + k, v));
+        DistributedConfig config = new DistributedConfig(settings);
+        Map<String, Object> actual = config.offsetStorageTopicSettings();
+        assertEquals(expectedTopicSettings, actual);
+        assertNotEquals(topicSettings, actual);
+    }
+
+    @Test
+    public void shouldRemoveCompactionFromStatusTopicSettings() {
+        Map<String, String> expectedTopicSettings = new HashMap<>();
+        expectedTopicSettings.put("foo", "foo value");
+        expectedTopicSettings.put("bar", "bar value");
+        expectedTopicSettings.put("baz.bim", "100");
+        Map<String, String> topicSettings = new HashMap<>(expectedTopicSettings);
+        topicSettings.put("cleanup.policy", "something-else");
+
+        Map<String, String> settings = configs();
+        topicSettings.forEach((k, v) -> settings.put(DistributedConfig.STATUS_STORAGE_PREFIX + k, v));
+        DistributedConfig config = new DistributedConfig(settings);
+        Map<String, Object> actual = config.statusStorageTopicSettings();
+        assertEquals(expectedTopicSettings, actual);
+        assertNotEquals(topicSettings, actual);
+    }
+
+    @Test
+    public void testInvalidSecurityProtocol() {
+        Map<String, String> configs = configs();
+
+        configs.put(CommonClientConfigs.SECURITY_PROTOCOL_CONFIG, "abc");
+        ConfigException ce = assertThrows(ConfigException.class,
+                () -> new DistributedConfig(configs));
+        assertTrue(ce.getMessage().contains(CommonClientConfigs.SECURITY_PROTOCOL_CONFIG));
+    }
+
+    @Test
+    public void shouldIdentifyNeedForTransactionalLeader() {
+        Map<String, String> workerProps = configs();
+
+        workerProps.put(EXACTLY_ONCE_SOURCE_SUPPORT_CONFIG, "disabled");
+        assertFalse(new DistributedConfig(workerProps).transactionalLeaderEnabled());
+
+        workerProps.put(EXACTLY_ONCE_SOURCE_SUPPORT_CONFIG, "preparing");
+        assertTrue(new DistributedConfig(workerProps).transactionalLeaderEnabled());
+
+        workerProps.put(EXACTLY_ONCE_SOURCE_SUPPORT_CONFIG, "enabled");
+        assertTrue(new DistributedConfig(workerProps).transactionalLeaderEnabled());
+    }
+
+    @Test
+    public void shouldConstructExpectedTransactionalId() {
+        Map<String, String> workerProps = configs();
+
+        workerProps.put(GROUP_ID_CONFIG, "why did i stay up all night writing unit tests");
+        assertEquals(
+                "connect-cluster-why did i stay up all night writing unit tests",
+                new DistributedConfig(workerProps).transactionalProducerId()
+        );
+
+        workerProps.put(GROUP_ID_CONFIG, "connect-cluster");
+        assertEquals(
+                "connect-cluster-connect-cluster",
+                new DistributedConfig(workerProps).transactionalProducerId()
+        );
+
+        workerProps.put(GROUP_ID_CONFIG, "\u2603");
+        assertEquals(
+                "connect-cluster-\u2603",
+                new DistributedConfig(workerProps).transactionalProducerId()
+        );
+    }
+
 }

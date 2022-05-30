@@ -83,7 +83,7 @@ object EndToEndLatency {
     val producerProps = loadPropsWithBootstrapServers
     producerProps.put(ProducerConfig.LINGER_MS_CONFIG, "0") //ensure writes are synchronous
     producerProps.put(ProducerConfig.MAX_BLOCK_MS_CONFIG, Long.MaxValue.toString)
-    producerProps.put(ProducerConfig.ACKS_CONFIG, producerAcks.toString)
+    producerProps.put(ProducerConfig.ACKS_CONFIG, producerAcks)
     producerProps.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, "org.apache.kafka.common.serialization.ByteArraySerializer")
     producerProps.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, "org.apache.kafka.common.serialization.ByteArraySerializer")
     val producer = new KafkaProducer[Array[Byte], Array[Byte]](producerProps)
@@ -109,7 +109,7 @@ object EndToEndLatency {
       .map(p => new TopicPartition(p.topic(), p.partition())).asJava
     consumer.assign(topicPartitions)
     consumer.seekToEnd(topicPartitions)
-    consumer.assignment().asScala.foreach(consumer.position)
+    consumer.assignment.forEach(consumer.position(_))
 
     var totalTime = 0.0
     val latencies = new Array[Long](numMessages)

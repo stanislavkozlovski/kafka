@@ -24,11 +24,9 @@ import kafka.server.{BaseRequestTest, KafkaConfig}
 import kafka.utils.{JaasTestUtils, TestUtils}
 import org.apache.kafka.clients.admin.{Admin, AdminClientConfig}
 import org.apache.kafka.common.security.auth.SecurityProtocol
-import org.junit.Assert._
-import org.junit.{After, Before, Test}
-import org.scalatest.Assertions.intercept
+import org.junit.jupiter.api.Assertions._
+import org.junit.jupiter.api.{AfterEach, BeforeEach, Test, TestInfo}
 
-import scala.jdk.CollectionConverters._
 import scala.collection.mutable.ListBuffer
 import scala.concurrent.ExecutionException
 
@@ -42,10 +40,10 @@ class DelegationTokenCommandTest extends BaseRequestTest with SaslSetup {
 
   override def brokerCount = 1
 
-  @Before
-  override def setUp(): Unit = {
+  @BeforeEach
+  override def setUp(testInfo: TestInfo): Unit = {
     startSasl(jaasSections(kafkaServerSaslMechanisms, Some(kafkaClientSaslMechanism), KafkaSasl, JaasTestUtils.KafkaServerContextName))
-    super.setUp()
+    super.setUp(testInfo)
   }
 
   override def generateConfigs = {
@@ -57,12 +55,12 @@ class DelegationTokenCommandTest extends BaseRequestTest with SaslSetup {
     props.map(KafkaConfig.fromProps)
   }
 
-  private def createAdminConfig():util.Map[String, Object] = {
+  private def createAdminConfig: util.Map[String, Object] = {
     val config = new util.HashMap[String, Object]
-    config.put(AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG, brokerList)
+    config.put(AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers())
     val securityProps: util.Map[Object, Object] =
       TestUtils.adminClientSecurityConfigs(securityProtocol, trustStoreFile, clientSaslProperties)
-    securityProps.asScala.foreach { case (key, value) => config.put(key.asInstanceOf[String], value) }
+    securityProps.forEach { (key, value) => config.put(key.asInstanceOf[String], value) }
     config
   }
 
@@ -105,40 +103,40 @@ class DelegationTokenCommandTest extends BaseRequestTest with SaslSetup {
     assertTrue(tokens.size == 0)
 
     //create token with invalid renewer principal type
-    intercept[ExecutionException](DelegationTokenCommand.createToken(adminClient, getCreateOpts(List("Group:Renewer3"))))
+    assertThrows(classOf[ExecutionException], () => DelegationTokenCommand.createToken(adminClient, getCreateOpts(List("Group:Renewer3"))))
 
     // try describing tokens for unknown owner
     assertTrue(DelegationTokenCommand.describeToken(adminClient, getDescribeOpts(List("User:Unknown"))).isEmpty)
   }
 
   private def getCreateOpts(renewers: List[String]): DelegationTokenCommandOptions = {
-    val opts = ListBuffer("--bootstrap-server", brokerList, "--max-life-time-period", "-1",
+    val opts = ListBuffer("--bootstrap-server", bootstrapServers(), "--max-life-time-period", "-1",
       "--command-config", "testfile", "--create")
     renewers.foreach(renewer => opts ++= ListBuffer("--renewer-principal", renewer))
     new DelegationTokenCommandOptions(opts.toArray)
   }
 
   private def getDescribeOpts(owners: List[String]): DelegationTokenCommandOptions = {
-    val opts = ListBuffer("--bootstrap-server", brokerList, "--command-config", "testfile", "--describe")
+    val opts = ListBuffer("--bootstrap-server", bootstrapServers(), "--command-config", "testfile", "--describe")
     owners.foreach(owner => opts ++= ListBuffer("--owner-principal", owner))
     new DelegationTokenCommandOptions(opts.toArray)
   }
 
   private def getRenewOpts(hmac: String): DelegationTokenCommandOptions = {
-    val opts = Array("--bootstrap-server", brokerList, "--command-config", "testfile", "--renew",
+    val opts = Array("--bootstrap-server", bootstrapServers(), "--command-config", "testfile", "--renew",
       "--renew-time-period", "-1",
       "--hmac", hmac)
     new DelegationTokenCommandOptions(opts)
   }
 
   private def getExpireOpts(hmac: String): DelegationTokenCommandOptions = {
-    val opts = Array("--bootstrap-server", brokerList, "--command-config", "testfile", "--expire",
+    val opts = Array("--bootstrap-server", bootstrapServers(), "--command-config", "testfile", "--expire",
       "--expiry-time-period", "-1",
       "--hmac", hmac)
     new DelegationTokenCommandOptions(opts)
   }
 
-  @After
+  @AfterEach
   override def tearDown(): Unit = {
     if (adminClient != null)
       adminClient.close()

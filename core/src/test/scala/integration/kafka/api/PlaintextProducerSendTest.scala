@@ -27,27 +27,26 @@ import org.apache.kafka.clients.producer.{BufferExhaustedException, KafkaProduce
 import org.apache.kafka.common.errors.{InvalidTimestampException, RecordTooLargeException, SerializationException, TimeoutException}
 import org.apache.kafka.common.record.{DefaultRecord, DefaultRecordBatch, Records, TimestampType}
 import org.apache.kafka.common.serialization.ByteArraySerializer
-import org.junit.Assert._
-import org.junit.Test
-import org.scalatest.Assertions.intercept
+import org.junit.jupiter.api.Assertions._
+import org.junit.jupiter.api.Test
 
 
 class PlaintextProducerSendTest extends BaseProducerSendTest {
 
-  @Test(expected = classOf[SerializationException])
+  @Test
   def testWrongSerializer(): Unit = {
     val producerProps = new Properties()
-    producerProps.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, brokerList)
+    producerProps.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers())
     producerProps.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, "org.apache.kafka.common.serialization.StringSerializer")
     producerProps.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, "org.apache.kafka.common.serialization.StringSerializer")
     val producer = registerProducer(new KafkaProducer(producerProps))
     val record = new ProducerRecord[Array[Byte], Array[Byte]](topic, 0, "key".getBytes, "value".getBytes)
-    producer.send(record)
+    assertThrows(classOf[SerializationException], () => producer.send(record))
   }
 
   @Test
   def testBatchSizeZero(): Unit = {
-    val producer = createProducer(brokerList = brokerList,
+    val producer = createProducer(
       lingerMs = Int.MaxValue,
       deliveryTimeoutMs = Int.MaxValue,
       batchSize = 0)
@@ -56,7 +55,7 @@ class PlaintextProducerSendTest extends BaseProducerSendTest {
 
   @Test
   def testSendCompressedMessageWithLogAppendTime(): Unit = {
-    val producer = createProducer(brokerList = brokerList,
+    val producer = createProducer(
       compressionType = "gzip",
       lingerMs = Int.MaxValue,
       deliveryTimeoutMs = Int.MaxValue)
@@ -65,7 +64,7 @@ class PlaintextProducerSendTest extends BaseProducerSendTest {
 
   @Test
   def testSendNonCompressedMessageWithLogAppendTime(): Unit = {
-    val producer = createProducer(brokerList = brokerList, lingerMs = Int.MaxValue, deliveryTimeoutMs = Int.MaxValue)
+    val producer = createProducer(lingerMs = Int.MaxValue, deliveryTimeoutMs = Int.MaxValue)
     sendAndVerifyTimestamp(producer, TimestampType.LOG_APPEND_TIME)
   }
 
@@ -76,11 +75,11 @@ class PlaintextProducerSendTest extends BaseProducerSendTest {
    */
   @Test
   def testAutoCreateTopic(): Unit = {
-    val producer = createProducer(brokerList)
+    val producer = createProducer()
     try {
       // Send a message to auto-create the topic
       val record = new ProducerRecord(topic, null, "key".getBytes, "value".getBytes)
-      assertEquals("Should have offset 0", 0L, producer.send(record).get.offset)
+      assertEquals(0L, producer.send(record).get.offset, "Should have offset 0")
 
       // double check that the topic is created with leader elected
       TestUtils.waitUntilLeaderIsElectedOrChanged(zkClient, topic, 0)
@@ -96,23 +95,21 @@ class PlaintextProducerSendTest extends BaseProducerSendTest {
     topicProps.setProperty(LogConfig.MessageTimestampDifferenceMaxMsProp, "1000")
     createTopic(topic, 1, 2, topicProps)
 
-    val producer = createProducer(brokerList = brokerList)
+    val producer = createProducer()
     try {
-      producer.send(new ProducerRecord(topic, 0, System.currentTimeMillis() - 1001, "key".getBytes, "value".getBytes)).get()
-      fail("Should throw CorruptedRecordException")
-    } catch {
-      case e: ExecutionException => assertTrue(e.getCause.isInstanceOf[InvalidTimestampException])
+      val e = assertThrows(classOf[ExecutionException],
+        () => producer.send(new ProducerRecord(topic, 0, System.currentTimeMillis() - 1001, "key".getBytes, "value".getBytes)).get()).getCause
+      assertTrue(e.isInstanceOf[InvalidTimestampException])
     } finally {
       producer.close()
     }
 
     // Test compressed messages.
-    val compressedProducer = createProducer(brokerList = brokerList, compressionType = "gzip")
+    val compressedProducer = createProducer(compressionType = "gzip")
     try {
-      compressedProducer.send(new ProducerRecord(topic, 0, System.currentTimeMillis() - 1001, "key".getBytes, "value".getBytes)).get()
-      fail("Should throw CorruptedRecordException")
-    } catch {
-      case e: ExecutionException => assertTrue(e.getCause.isInstanceOf[InvalidTimestampException])
+      val e = assertThrows(classOf[ExecutionException],
+        () => compressedProducer.send(new ProducerRecord(topic, 0, System.currentTimeMillis() - 1001, "key".getBytes, "value".getBytes)).get()).getCause
+      assertTrue(e.isInstanceOf[InvalidTimestampException])
     } finally {
       compressedProducer.close()
     }
@@ -144,24 +141,24 @@ class PlaintextProducerSendTest extends BaseProducerSendTest {
     }
 
     def verifySendSuccess(future: Future[RecordMetadata]): Unit = {
-      val recordMetadata = future.get(10, TimeUnit.SECONDS)
+      val recordMetadata = future.get(30, TimeUnit.SECONDS)
       assertEquals(topic, recordMetadata.topic)
       assertEquals(0, recordMetadata.partition)
-      assertTrue(s"Invalid offset $recordMetadata", recordMetadata.offset >= 0)
+      assertTrue(recordMetadata.offset >= 0, s"Invalid offset $recordMetadata")
     }
 
     def verifyMetadataNotAvailable(future: Future[RecordMetadata]): Unit = {
       assertTrue(future.isDone)  // verify future was completed immediately
-      assertEquals(classOf[TimeoutException], intercept[ExecutionException](future.get).getCause.getClass)
+      assertEquals(classOf[TimeoutException], assertThrows(classOf[ExecutionException], () => future.get).getCause.getClass)
     }
 
     def verifyBufferExhausted(future: Future[RecordMetadata]): Unit = {
       assertTrue(future.isDone)  // verify future was completed immediately
-      assertEquals(classOf[BufferExhaustedException], intercept[ExecutionException](future.get).getCause.getClass)
+      assertEquals(classOf[BufferExhaustedException], assertThrows(classOf[ExecutionException], () => future.get).getCause.getClass)
     }
 
     // Topic metadata not available, send should fail without blocking
-    val producer = createProducer(brokerList = brokerList, maxBlockMs = 0)
+    val producer = createProducer(maxBlockMs = 0)
     verifyMetadataNotAvailable(send(producer))
 
     // Test that send starts succeeding once metadata is available
@@ -169,7 +166,7 @@ class PlaintextProducerSendTest extends BaseProducerSendTest {
     verifySendSuccess(future)
 
     // Verify that send fails immediately without blocking when there is no space left in the buffer
-    val producer2 = createProducer(brokerList = brokerList, maxBlockMs = 0,
+    val producer2 = createProducer(maxBlockMs = 0,
                                    lingerMs = 15000, batchSize = 1100, bufferSize = 1500)
     val future2 = sendUntilQueued(producer2) // wait until metadata is available and one record is queued
     verifyBufferExhausted(send(producer2))       // should fail send since buffer is full
@@ -179,7 +176,7 @@ class PlaintextProducerSendTest extends BaseProducerSendTest {
   @Test
   def testSendRecordBatchWithMaxRequestSizeAndHigher(): Unit = {
     val producerProps = new Properties()
-    producerProps.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, brokerList)
+    producerProps.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers())
     val producer = registerProducer(new KafkaProducer(producerProps, new ByteArraySerializer, new ByteArraySerializer))
 
     val keyLengthSize = 1
@@ -193,7 +190,7 @@ class PlaintextProducerSendTest extends BaseProducerSendTest {
     assertEquals(record0.value.length, producer.send(record0).get.serializedValueSize)
 
     val record1 = new ProducerRecord(topic, new Array[Byte](0), new Array[Byte](valueSize + 1))
-    assertEquals(classOf[RecordTooLargeException], intercept[ExecutionException](producer.send(record1).get).getCause.getClass)
+    assertEquals(classOf[RecordTooLargeException], assertThrows(classOf[ExecutionException], () => producer.send(record1).get).getCause.getClass)
   }
 
 }

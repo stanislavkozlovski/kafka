@@ -19,6 +19,7 @@ package org.apache.kafka.connect.tools;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.kafka.tools.ThroughputThrottler;
+import org.apache.kafka.clients.producer.RecordMetadata;
 import org.apache.kafka.connect.data.Schema;
 import org.apache.kafka.connect.errors.ConnectException;
 import org.apache.kafka.connect.source.SourceRecord;
@@ -91,7 +92,7 @@ public class VerifiableSourceTask extends SourceTask {
     }
 
     @Override
-    public List<SourceRecord> poll() throws InterruptedException {
+    public List<SourceRecord> poll() {
         long sendStartMs = System.currentTimeMillis();
         if (throttler.shouldThrottle(seqno - startingSeqno, sendStartMs))
             throttler.throttle();
@@ -120,7 +121,7 @@ public class VerifiableSourceTask extends SourceTask {
     }
 
     @Override
-    public void commitRecord(SourceRecord record) throws InterruptedException {
+    public void commitRecord(SourceRecord record, RecordMetadata metadata) {
         Map<String, Object> data = new HashMap<>();
         data.put("name", name);
         data.put("task", id);

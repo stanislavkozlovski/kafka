@@ -121,7 +121,7 @@ object DelegationTokenManager {
         require(mainJs(VersionKey).to[Int] == CurrentVersion)
         val owner = SecurityUtils.parseKafkaPrincipal(Sanitizer.desanitize(mainJs(OwnerKey).to[String]))
         val renewerStr = mainJs(RenewersKey).to[Seq[String]]
-        val renewers = renewerStr.map(Sanitizer.desanitize(_)).map(SecurityUtils.parseKafkaPrincipal(_))
+        val renewers = renewerStr.map(Sanitizer.desanitize).map(SecurityUtils.parseKafkaPrincipal)
         val issueTimestamp = mainJs(IssueTimestampKey).to[Long]
         val expiryTimestamp = mainJs(ExpiryTimestampKey).to[Long]
         val maxTimestamp = mainJs(MaxTimestampKey).to[Long]
@@ -140,13 +140,13 @@ object DelegationTokenManager {
 
     val allow =
     //exclude tokens which are not requested
-      if (!owners.isEmpty && !owners.get.exists(owner => token.ownerOrRenewer(owner))) {
+      if (owners.isDefined && !owners.get.exists(owner => token.ownerOrRenewer(owner))) {
         false
         //Owners and the renewers can describe their own tokens
       } else if (token.ownerOrRenewer(requestedPrincipal)) {
         true
         // Check permission for non-owned tokens
-      } else if ((authorizeToken(token.tokenId))) {
+      } else if (authorizeToken(token.tokenId)) {
         true
       }
       else {
@@ -171,8 +171,8 @@ class DelegationTokenManager(val config: KafkaConfig,
   type DescribeResponseCallback = (Errors, List[DelegationToken]) => Unit
 
   val secretKey = {
-    val keyBytes =  if (config.tokenAuthEnabled) config.delegationTokenMasterKey.value.getBytes(StandardCharsets.UTF_8) else null
-    if (keyBytes == null || keyBytes.length == 0) null
+    val keyBytes =  if (config.tokenAuthEnabled) config.delegationTokenSecretKey.value.getBytes(StandardCharsets.UTF_8) else null
+    if (keyBytes == null || keyBytes.isEmpty) null
     else
       createSecretKey(keyBytes)
   }
@@ -183,16 +183,16 @@ class DelegationTokenManager(val config: KafkaConfig,
   private val lock = new Object()
   private var tokenChangeListener: ZkNodeChangeNotificationListener = null
 
-  def startup() = {
+  def startup(): Unit = {
     if (config.tokenAuthEnabled) {
-      zkClient.createDelegationTokenPaths
-      loadCache
+      zkClient.createDelegationTokenPaths()
+      loadCache()
       tokenChangeListener = new ZkNodeChangeNotificationListener(zkClient, DelegationTokenChangeNotificationZNode.path, DelegationTokenChangeNotificationSequenceZNode.SequenceNumberPrefix, TokenChangedNotificationHandler)
-      tokenChangeListener.init
+      tokenChangeListener.init()
     }
   }
 
-  def shutdown() = {
+  def shutdown(): Unit = {
     if (config.tokenAuthEnabled) {
       if (tokenChangeListener != null) tokenChangeListener.close()
     }
@@ -267,7 +267,7 @@ class DelegationTokenManager(val config: KafkaConfig,
       responseCallback(CreateTokenResult(-1, -1, -1, "", Array[Byte](), Errors.DELEGATION_TOKEN_AUTH_DISABLED))
     } else {
       lock.synchronized {
-        val tokenId = CoreUtils.generateUuidAsBase64
+        val tokenId = CoreUtils.generateUuidAsBase64()
 
         val issueTimeStamp = time.milliseconds
         val maxLifeTime = if (maxLifeTimeMs <= 0) tokenMaxLifetime else Math.min(maxLifeTimeMs, tokenMaxLifetime)
@@ -464,16 +464,10 @@ class DelegationTokenManager(val config: KafkaConfig,
     }
   }
 
-  /**
-   *
-   * @return
-   */
-  def getAllTokenInformation(): List[TokenInformation] = {
-    tokenCache.tokens.asScala.toList
-  }
+  def getAllTokenInformation: List[TokenInformation] = tokenCache.tokens.asScala.toList
 
   def getTokens(filterToken: TokenInformation => Boolean): List[DelegationToken] = {
-    getAllTokenInformation().filter(filterToken).map(token => getToken(token))
+    getAllTokenInformation.filter(filterToken).map(token => getToken(token))
   }
 
   object TokenChangedNotificationHandler extends NotificationHandler {

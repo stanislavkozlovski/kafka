@@ -18,11 +18,13 @@ package org.apache.kafka.streams.processor.internals;
 
 
 import org.apache.kafka.common.TopicPartition;
+import org.apache.kafka.streams.processor.CommitCallback;
 import org.apache.kafka.streams.processor.StateRestoreCallback;
 import org.apache.kafka.streams.processor.StateStore;
 
 import java.io.File;
 import java.util.Map;
+import org.apache.kafka.streams.processor.internals.Task.TaskType;
 
 public class StateManagerStub implements StateManager {
 
@@ -33,7 +35,8 @@ public class StateManagerStub implements StateManager {
 
     @Override
     public void registerStore(final StateStore store,
-                              final StateRestoreCallback stateRestoreCallback) {}
+                              final StateRestoreCallback stateRestoreCallback,
+                              final CommitCallback checkpoint) {}
 
     @Override
     public void flush() {}
@@ -57,6 +60,18 @@ public class StateManagerStub implements StateManager {
     }
 
     @Override
-    public void checkpoint(final Map<TopicPartition, Long> offsets) {}
+    public void updateChangelogOffsets(final Map<TopicPartition, Long> writtenOffsets) {}
 
+    @Override
+    public void checkpoint() {}
+
+    @Override
+    public TaskType taskType() {
+        return null;
+    }
+
+    @Override
+    public String changelogFor(final String storeName) {
+        return null;
+    }
 }

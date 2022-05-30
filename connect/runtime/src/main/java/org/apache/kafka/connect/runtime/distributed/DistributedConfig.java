@@ -17,10 +17,15 @@
 package org.apache.kafka.connect.runtime.distributed;
 
 import org.apache.kafka.clients.CommonClientConfigs;
+import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.common.config.ConfigDef;
 import org.apache.kafka.common.config.ConfigException;
+import org.apache.kafka.common.config.TopicConfig;
+import org.apache.kafka.common.security.auth.SecurityProtocol;
 import org.apache.kafka.common.utils.Utils;
 import org.apache.kafka.connect.runtime.WorkerConfig;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import javax.crypto.KeyGenerator;
 import javax.crypto.Mac;
@@ -28,14 +33,22 @@ import java.security.InvalidParameterException;
 import java.security.NoSuchAlgorithmException;
 import java.util.Collections;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 
 import static org.apache.kafka.common.config.ConfigDef.Range.atLeast;
 import static org.apache.kafka.common.config.ConfigDef.Range.between;
+import static org.apache.kafka.common.config.ConfigDef.ValidString.in;
+import static org.apache.kafka.common.utils.Utils.enumOptions;
+import static org.apache.kafka.connect.runtime.TopicCreationConfig.PARTITIONS_VALIDATOR;
+import static org.apache.kafka.connect.runtime.TopicCreationConfig.REPLICATION_FACTOR_VALIDATOR;
 
 public class DistributedConfig extends WorkerConfig {
+
+    private static final Logger log = LoggerFactory.getLogger(DistributedConfig.class);
+
     /*
      * NOTE: DO NOT CHANGE EITHER CONFIG STRINGS OR THEIR JAVA VARIABLE NAMES AS
      * THESE ARE PART OF THE PUBLIC API AND CHANGE WILL BREAK USER CODE.
@@ -90,52 +103,59 @@ public class DistributedConfig extends WorkerConfig {
             " fails to catch up within worker.sync.timeout.ms, leave the Connect cluster for this long before rejoining.";
     public static final int WORKER_UNSYNC_BACKOFF_MS_DEFAULT = 5 * 60 * 1000;
 
+    public static final String CONFIG_STORAGE_PREFIX = "config.storage.";
+    public static final String OFFSET_STORAGE_PREFIX = "offset.storage.";
+    public static final String STATUS_STORAGE_PREFIX = "status.storage.";
+    public static final String TOPIC_SUFFIX = "topic";
+    public static final String PARTITIONS_SUFFIX = "partitions";
+    public static final String REPLICATION_FACTOR_SUFFIX = "replication.factor";
+
     /**
      * <code>offset.storage.topic</code>
      */
-    public static final String OFFSET_STORAGE_TOPIC_CONFIG = "offset.storage.topic";
+    public static final String OFFSET_STORAGE_TOPIC_CONFIG = OFFSET_STORAGE_PREFIX + TOPIC_SUFFIX;
     private static final String OFFSET_STORAGE_TOPIC_CONFIG_DOC = "The name of the Kafka topic where connector offsets are stored";
 
     /**
      * <code>offset.storage.partitions</code>
      */
-    public static final String OFFSET_STORAGE_PARTITIONS_CONFIG = "offset.storage.partitions";
+    public static final String OFFSET_STORAGE_PARTITIONS_CONFIG = OFFSET_STORAGE_PREFIX + PARTITIONS_SUFFIX;
     private static final String OFFSET_STORAGE_PARTITIONS_CONFIG_DOC = "The number of partitions used when creating the offset storage topic";
 
     /**
      * <code>offset.storage.replication.factor</code>
      */
-    public static final String OFFSET_STORAGE_REPLICATION_FACTOR_CONFIG = "offset.storage.replication.factor";
+    public static final String OFFSET_STORAGE_REPLICATION_FACTOR_CONFIG = OFFSET_STORAGE_PREFIX + REPLICATION_FACTOR_SUFFIX;
     private static final String OFFSET_STORAGE_REPLICATION_FACTOR_CONFIG_DOC = "Replication factor used when creating the offset storage topic";
 
     /**
      * <code>config.storage.topic</code>
      */
-    public static final String CONFIG_TOPIC_CONFIG = "config.storage.topic";
+    public static final String CONFIG_TOPIC_CONFIG = CONFIG_STORAGE_PREFIX + TOPIC_SUFFIX;
     private static final String CONFIG_TOPIC_CONFIG_DOC = "The name of the Kafka topic where connector configurations are stored";
 
     /**
      * <code>config.storage.replication.factor</code>
      */
-    public static final String CONFIG_STORAGE_REPLICATION_FACTOR_CONFIG = "config.storage.replication.factor";
+    public static final String CONFIG_STORAGE_REPLICATION_FACTOR_CONFIG = CONFIG_STORAGE_PREFIX + REPLICATION_FACTOR_SUFFIX;
     private static final String CONFIG_STORAGE_REPLICATION_FACTOR_CONFIG_DOC = "Replication factor used when creating the configuration storage topic";
 
     /**
      * <code>status.storage.topic</code>
      */
-    public static final String STATUS_STORAGE_TOPIC_CONFIG = "status.storage.topic";
+    public static final String STATUS_STORAGE_TOPIC_CONFIG = STATUS_STORAGE_PREFIX + TOPIC_SUFFIX;
     public static final String STATUS_STORAGE_TOPIC_CONFIG_DOC = "The name of the Kafka topic where connector and task status are stored";
 
     /**
      * <code>status.storage.partitions</code>
      */
-    public static final String STATUS_STORAGE_PARTITIONS_CONFIG = "status.storage.partitions";
+    public static final String STATUS_STORAGE_PARTITIONS_CONFIG = STATUS_STORAGE_PREFIX + PARTITIONS_SUFFIX;
     private static final String STATUS_STORAGE_PARTITIONS_CONFIG_DOC = "The number of partitions used when creating the status storage topic";
 
     /**
      * <code>status.storage.replication.factor</code>
      */
-    public static final String STATUS_STORAGE_REPLICATION_FACTOR_CONFIG = "status.storage.replication.factor";
+    public static final String STATUS_STORAGE_REPLICATION_FACTOR_CONFIG = STATUS_STORAGE_PREFIX + REPLICATION_FACTOR_SUFFIX;
     private static final String STATUS_STORAGE_REPLICATION_FACTOR_CONFIG_DOC = "Replication factor used when creating the status storage topic";
 
     /**
@@ -146,7 +166,7 @@ public class DistributedConfig extends WorkerConfig {
     public static final String CONNECT_PROTOCOL_DEFAULT = ConnectProtocolCompatibility.SESSIONED.toString();
 
     /**
-     * <code>connect.protocol</code>
+     * <code>scheduled.rebalance.max.delay.ms</code>
      */
     public static final String SCHEDULED_REBALANCE_MAX_DELAY_MS_CONFIG = "scheduled.rebalance.max.delay.ms";
     public static final String SCHEDULED_REBALANCE_MAX_DELAY_MS_DOC = "The maximum delay that is "
@@ -177,6 +197,34 @@ public class DistributedConfig extends WorkerConfig {
     public static final String INTER_WORKER_VERIFICATION_ALGORITHMS_DOC = "A list of permitted algorithms for verifying internal requests";
     public static final List<String> INTER_WORKER_VERIFICATION_ALGORITHMS_DEFAULT = Collections.singletonList(INTER_WORKER_SIGNATURE_ALGORITHM_DEFAULT);
 
+    private enum ExactlyOnceSourceSupport {
+        DISABLED(false),
+        PREPARING(true),
+        ENABLED(true);
+
+        public final boolean usesTransactionalLeader;
+
+        ExactlyOnceSourceSupport(boolean usesTransactionalLeader) {
+            this.usesTransactionalLeader = usesTransactionalLeader;
+        }
+
+        public static ExactlyOnceSourceSupport fromProperty(String property) {
+            return ExactlyOnceSourceSupport.valueOf(property.toUpperCase(Locale.ROOT));
+        }
+
+        @Override
+        public String toString() {
+            return name().toLowerCase(Locale.ROOT);
+        }
+    }
+
+    public static final String EXACTLY_ONCE_SOURCE_SUPPORT_CONFIG = "exactly.once.source.support";
+    public static final String EXACTLY_ONCE_SOURCE_SUPPORT_DOC = "Whether to enable exactly-once support for source connectors in the cluster "
+            + "by using transactions to write source records and their source offsets, and by proactively fencing out old task generations before bringing up new ones. ";
+            // TODO: https://issues.apache.org/jira/browse/KAFKA-13709
+            //       + "See the exactly-once source support documentation at [add docs link here] for more information on this feature.";
+    public static final String EXACTLY_ONCE_SOURCE_SUPPORT_DEFAULT = ExactlyOnceSourceSupport.DISABLED.toString();
+
     @SuppressWarnings("unchecked")
     private static final ConfigDef CONFIG = baseConfigDef()
             .define(GROUP_ID_CONFIG,
@@ -198,6 +246,12 @@ public class DistributedConfig extends WorkerConfig {
                     Math.toIntExact(TimeUnit.SECONDS.toMillis(3)),
                     ConfigDef.Importance.HIGH,
                     HEARTBEAT_INTERVAL_MS_DOC)
+            .define(EXACTLY_ONCE_SOURCE_SUPPORT_CONFIG,
+                    ConfigDef.Type.STRING,
+                    EXACTLY_ONCE_SOURCE_SUPPORT_DEFAULT,
+                    ConfigDef.CaseInsensitiveValidString.in(enumOptions(ExactlyOnceSourceSupport.class)),
+                    ConfigDef.Importance.HIGH,
+                    EXACTLY_ONCE_SOURCE_SUPPORT_DOC)
             .define(CommonClientConfigs.METADATA_MAX_AGE_CONFIG,
                     ConfigDef.Type.LONG,
                     TimeUnit.MINUTES.toMillis(5),
@@ -233,6 +287,18 @@ public class DistributedConfig extends WorkerConfig {
                     atLeast(0L),
                     ConfigDef.Importance.LOW,
                     CommonClientConfigs.RECONNECT_BACKOFF_MAX_MS_DOC)
+            .define(CommonClientConfigs.SOCKET_CONNECTION_SETUP_TIMEOUT_MS_CONFIG,
+                    ConfigDef.Type.LONG,
+                    CommonClientConfigs.DEFAULT_SOCKET_CONNECTION_SETUP_TIMEOUT_MS,
+                    atLeast(0L),
+                    ConfigDef.Importance.LOW,
+                    CommonClientConfigs.SOCKET_CONNECTION_SETUP_TIMEOUT_MS_DOC)
+            .define(CommonClientConfigs.SOCKET_CONNECTION_SETUP_TIMEOUT_MAX_MS_CONFIG,
+                    ConfigDef.Type.LONG,
+                    CommonClientConfigs.DEFAULT_SOCKET_CONNECTION_SETUP_TIMEOUT_MAX_MS,
+                    atLeast(0L),
+                    ConfigDef.Importance.LOW,
+                    CommonClientConfigs.SOCKET_CONNECTION_SETUP_TIMEOUT_MAX_MS_DOC)
             .define(CommonClientConfigs.RETRY_BACKOFF_MS_CONFIG,
                     ConfigDef.Type.LONG,
                     100L,
@@ -255,9 +321,9 @@ public class DistributedConfig extends WorkerConfig {
             .define(CommonClientConfigs.SECURITY_PROTOCOL_CONFIG,
                     ConfigDef.Type.STRING,
                     CommonClientConfigs.DEFAULT_SECURITY_PROTOCOL,
+                    in(Utils.enumOptions(SecurityProtocol.class)),
                     ConfigDef.Importance.MEDIUM,
                     CommonClientConfigs.SECURITY_PROTOCOL_DOC)
-            .withClientSslSupport()
             .withClientSaslSupport()
             .define(WORKER_SYNC_TIMEOUT_MS_CONFIG,
                     ConfigDef.Type.INT,
@@ -276,13 +342,13 @@ public class DistributedConfig extends WorkerConfig {
             .define(OFFSET_STORAGE_PARTITIONS_CONFIG,
                     ConfigDef.Type.INT,
                     25,
-                    atLeast(1),
+                    PARTITIONS_VALIDATOR,
                     ConfigDef.Importance.LOW,
                     OFFSET_STORAGE_PARTITIONS_CONFIG_DOC)
             .define(OFFSET_STORAGE_REPLICATION_FACTOR_CONFIG,
                     ConfigDef.Type.SHORT,
                     (short) 3,
-                    atLeast(1),
+                    REPLICATION_FACTOR_VALIDATOR,
                     ConfigDef.Importance.LOW,
                     OFFSET_STORAGE_REPLICATION_FACTOR_CONFIG_DOC)
             .define(CONFIG_TOPIC_CONFIG,
@@ -292,7 +358,7 @@ public class DistributedConfig extends WorkerConfig {
             .define(CONFIG_STORAGE_REPLICATION_FACTOR_CONFIG,
                     ConfigDef.Type.SHORT,
                     (short) 3,
-                    atLeast(1),
+                    REPLICATION_FACTOR_VALIDATOR,
                     ConfigDef.Importance.LOW,
                     CONFIG_STORAGE_REPLICATION_FACTOR_CONFIG_DOC)
             .define(STATUS_STORAGE_TOPIC_CONFIG,
@@ -302,13 +368,13 @@ public class DistributedConfig extends WorkerConfig {
             .define(STATUS_STORAGE_PARTITIONS_CONFIG,
                     ConfigDef.Type.INT,
                     5,
-                    atLeast(1),
+                    PARTITIONS_VALIDATOR,
                     ConfigDef.Importance.LOW,
                     STATUS_STORAGE_PARTITIONS_CONFIG_DOC)
             .define(STATUS_STORAGE_REPLICATION_FACTOR_CONFIG,
                     ConfigDef.Type.SHORT,
                     (short) 3,
-                    atLeast(1),
+                    REPLICATION_FACTOR_VALIDATOR,
                     ConfigDef.Importance.LOW,
                     STATUS_STORAGE_REPLICATION_FACTOR_CONFIG_DOC)
             .define(CONNECT_PROTOCOL_CONFIG,
@@ -370,19 +436,63 @@ public class DistributedConfig extends WorkerConfig {
                     ConfigDef.Importance.LOW,
                     INTER_WORKER_VERIFICATION_ALGORITHMS_DOC);
 
+    private final ExactlyOnceSourceSupport exactlyOnceSourceSupport;
+
     @Override
     public Integer getRebalanceTimeout() {
         return getInt(DistributedConfig.REBALANCE_TIMEOUT_MS_CONFIG);
     }
 
+    @Override
+    public boolean exactlyOnceSourceEnabled() {
+        return exactlyOnceSourceSupport == ExactlyOnceSourceSupport.ENABLED;
+    }
+
+    /**
+     * @return whether the Connect cluster's leader should use a transactional producer to perform writes to the config
+     * topic, which is useful for ensuring that zombie leaders are fenced out and unable to write to the topic after a
+     * new leader has been elected.
+     */
+    public boolean transactionalLeaderEnabled() {
+        return exactlyOnceSourceSupport.usesTransactionalLeader;
+    }
+
+    /**
+     * @return the {@link ProducerConfig#TRANSACTIONAL_ID_CONFIG transactional ID} to use for the worker's producer if
+     * using a transactional producer for writes to internal topics such as the config topic.
+     */
+    public String transactionalProducerId() {
+        return transactionalProducerId(groupId());
+    }
+
+    public static String transactionalProducerId(String groupId) {
+        return "connect-cluster-" + groupId;
+    }
+
+    @Override
+    public String offsetsTopic() {
+        return getString(OFFSET_STORAGE_TOPIC_CONFIG);
+    }
+
+    @Override
+    public boolean connectorOffsetsTopicsPermitted() {
+        return true;
+    }
+
+    @Override
+    public String groupId() {
+        return getString(GROUP_ID_CONFIG);
+    }
+
     public DistributedConfig(Map<String, String> props) {
         super(CONFIG, props);
+        exactlyOnceSourceSupport = ExactlyOnceSourceSupport.fromProperty(getString(EXACTLY_ONCE_SOURCE_SUPPORT_CONFIG));
         getInternalRequestKeyGenerator(); // Check here for a valid key size + key algorithm to fail fast if either are invalid
         validateKeyAlgorithmAndVerificationAlgorithms();
     }
 
     public static void main(String[] args) {
-        System.out.println(CONFIG.toHtml());
+        System.out.println(CONFIG.toHtml(4, config -> "connectconfigs_" + config));
     }
 
     public KeyGenerator getInternalRequestKeyGenerator() {
@@ -398,6 +508,33 @@ public class DistributedConfig extends WorkerConfig {
                 e.getMessage()
             ));
         }
+    }
+
+    private Map<String, Object> topicSettings(String prefix) {
+        Map<String, Object> result = originalsWithPrefix(prefix);
+        if (CONFIG_STORAGE_PREFIX.equals(prefix) && result.containsKey(PARTITIONS_SUFFIX)) {
+            log.warn("Ignoring '{}{}={}' setting, since config topic partitions is always 1", prefix, PARTITIONS_SUFFIX, result.get("partitions"));
+        }
+        Object removedPolicy = result.remove(TopicConfig.CLEANUP_POLICY_CONFIG);
+        if (removedPolicy != null) {
+            log.warn("Ignoring '{}cleanup.policy={}' setting, since compaction is always used", prefix, removedPolicy);
+        }
+        result.remove(TOPIC_SUFFIX);
+        result.remove(REPLICATION_FACTOR_SUFFIX);
+        result.remove(PARTITIONS_SUFFIX);
+        return result;
+    }
+
+    public Map<String, Object> configStorageTopicSettings() {
+        return topicSettings(CONFIG_STORAGE_PREFIX);
+    }
+
+    public Map<String, Object> offsetStorageTopicSettings() {
+        return topicSettings(OFFSET_STORAGE_PREFIX);
+    }
+
+    public Map<String, Object> statusStorageTopicSettings() {
+        return topicSettings(STATUS_STORAGE_PREFIX);
     }
 
     private void validateKeyAlgorithmAndVerificationAlgorithms() {

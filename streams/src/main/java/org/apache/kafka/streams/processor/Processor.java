@@ -23,7 +23,9 @@ import java.time.Duration;
  *
  * @param <K> the type of keys
  * @param <V> the type of values
+ * @deprecated Since 3.0. Use {@link org.apache.kafka.streams.processor.api.Processor} instead.
  */
+@Deprecated
 public interface Processor<K, V> {
 
     /**
@@ -37,7 +39,7 @@ public interface Processor<K, V> {
      * 
      * @param context the context; may not be null
      */
-    void init(ProcessorContext<Object, Object> context);
+    void init(ProcessorContext context);
 
     /**
      * Process the record with the given key and value.
